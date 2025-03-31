@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flowlenia Visualization</title>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            background: linear-gradient(135deg, #1a1a1a, #2c2c2c, #1a1a1a);
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #zoomContainer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            transform-origin: 0 0;
+        }
+
+        #selectedEntries,
+        #controlsMenu {
+            position: fixed;
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 1000;
+            backdrop-filter: blur(5px);
+        }
+
+        #selectedEntries {
+            top: 10px;
+            left: 10px;
+        }
+
+        #controlsMenu {
+            top: 10px;
+            right: 10px;
+        }
+
+        #controlsToggle {
+            cursor: pointer;
+        }
+
+        #controlsContent {
+            display: none;
+        }
+
+        .discovery-item {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            cursor: pointer;
+        }
+
+        .discovery-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 5%;
+            outline: thin solid rgba(255, 255, 255, 0.5);
+        }
+
+        #videoOverlay {
+            display: none;
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 1001;
+            backdrop-filter: blur(5px);
+        }
+
+        #videoOverlay video {
+            max-width: 480px;
+            max-height: 320px;
+            border-radius: 5px;
+        }
+
+        button {
+            margin-top: 10px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        .placeholder {
+            background-color: rgba(240, 240, 240, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            color: #ccc;
+            width: 100%;
+            height: 100%;
+            border-radius: 5px;
+            outline: 1px solid rgba(255, 255, 255, 0.5);
+        }
+
+        #imageSizeSlider,
+        #imageCountSlider {
+            display: block;
+            margin-top: 10px;
+        }
+
+        .progress-bar-container {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 5px;
+            background-color: #f0f0f0;
+            z-index: 1000;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background-color: #4CAF50;
+            width: 0%;
+            transition: width 0.3s ease-in-out;
+        }
+
+        #imageCounter {
+            margin-top: 10px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <div id="zoomContainer"></div>
+        <div id="selectedEntries">
+            <h3>Selected Entries:</h3>
+            <ul id="exportList"></ul>
+            <button onclick="exportSelected()">Export</button>
+        </div>
+        <div id="controlsMenu">
+            <div id="viewSelector">
+                <label for="viewSelect">Select View:</label>
+                <select id="viewSelect" onchange="changeView()" style="display: block;"></select>
+            </div>
+            Image size:
+            <input type="range" id="imageSizeSlider" min="10" max="200" value="50">
+            Set trials count:
+            <input type="range" id="imageCountSlider" min="1" max="100" value="100">
+            <div id="imageCounter">Trials displayed: 100 / 100</div>
+            <div id="controlsToggle" onclick="toggleControls()">
+                Controls ▼
+            </div>
+            <div id="controlsContent">
+                <ul>
+                    <li><strong>Click:</strong> Play video</li>
+                    <li><strong>Double-click:</strong> Set/Unset target</li>
+                    <li><strong>Scroll:</strong> Zoom in/out</li>
+                    <li><strong>Drag:</strong> Pan the view</li>
+                </ul>
+            </div>
+        </div>
+        <div id="videoOverlay">
+            <video loop muted></video>
+            <button id="addToExportButton" style="display: block;">Add to Export</button>
+        </div>
+
+        <script>
+            let selectedEntries = new Set();
+            let scale = 1;
+            let translateX = 0;
+            let translateY = 0;
+            let isDragging = false;
+            let startX, startY;
+            let currentVideoIndex = null;
+            let imageSize = 50;
+            let discoveries = null;
+            let loadedImages = 0;
+            let totalImages = 0;
+            let data = null;
+            let shownImages = 100;
+
+            async function loadDiscoveries() {
+                const response = await fetch('discoveries.json');
+                data = await response.json();
+                discoveries = data['umap']
+            }
+
+            async function loadAvailableViews() {
+                const response = await fetch('views.json');
+                const data = await response.json();
+                const viewSelect = document.getElementById('viewSelect');
+                data.views.forEach(view => {
+                    const option = document.createElement('option');
+                    option.value = view;
+                    option.textContent = view;
+                    viewSelect.appendChild(option);
+                });
+            }
+
+            function renderDiscoveries() {
+                const container = document.getElementById('zoomContainer');
+                container.innerHTML = ''; // Clear existing content
+
+                const progressBarContainer = document.createElement('div');
+                progressBarContainer.className = 'progress-bar-container';
+                document.body.appendChild(progressBarContainer);
+
+                const progressBar = document.createElement('div');
+                progressBar.className = 'progress-bar';
+                progressBarContainer.appendChild(progressBar);
+
+                loadedImages = 0;
+                totalImages = discoveries.length;
+
+                // Sort discoveries by their index
+                const sortedDiscoveries = discoveries.sort((a, b) => {
+                    const indexA = parseInt(a.visual.split('/')[0]);
+                    const indexB = parseInt(b.visual.split('/')[0]);
+                    return indexA - indexB;
+                });
+
+                // Only render the first 'shownImages' number of discoveries
+                sortedDiscoveries.slice(0, shownImages).forEach((discovery, index) => {
+                    const item = document.createElement('div');
+                    item.className = 'discovery-item';
+                    item.style.left = `${(discovery.x + 0.5) * 100}%`;
+                    item.style.top = `${(0.5 - discovery.y) * 100}%`;
+                    item.style.width = `${imageSize}px`;
+                    item.style.height = `${imageSize}px`;
+
+                    const img = new Image();
+                    img.src = `${discovery.visual.replace('.mp4', '.png')}`;
+                    img.alt = `Discovery ${index}`;
+                    img.loading = 'lazy';
+
+                    img.onload = function () {
+                        item.appendChild(this);
+                        loadedImages++;
+                        updateProgressBar();
+                    };
+
+                    img.onerror = function () {
+                        loadedImages++;
+                        updateProgressBar();
+                    };
+
+                    item.addEventListener('click', () => loadAndPlayVideo(index));
+                    item.addEventListener('dblclick', () => setTarget(discovery));
+                    container.appendChild(item);
+                });
+
+                updateTransform();
+                updateImageCounter();
+            }
+
+            function updateProgressBar() {
+                const progressBar = document.querySelector('.progress-bar');
+                const progress = (loadedImages / totalImages) * 100;
+                progressBar.style.width = `${progress}%`;
+                if (loadedImages === totalImages) {
+                    setTimeout(() => {
+                        document.querySelector('.progress-bar-container').style.display = 'none';
+                    }, 500);
+                }
+            }
+
+            function updateImageCounter() {
+                const counterElement = document.getElementById('imageCounter');
+                counterElement.textContent = `Trials displayed: ${shownImages} / ${totalImages}`;
+            }
+
+            function updateTransform() {
+                const zoomContainer = document.getElementById('zoomContainer');
+                zoomContainer.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+            }
+
+            document.getElementById('container').addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const zoomSpeed = 0.1;
+                const delta = e.deltaY > 0 ? -zoomSpeed : zoomSpeed;
+                const newScale = scale * (1 + delta);
+
+                if (newScale >= 0.1 && newScale <= 10) {
+                    const container = document.getElementById('container');
+                    const rect = container.getBoundingClientRect();
+                    const mouseX = e.clientX - rect.left;
+                    const mouseY = e.clientY - rect.top;
+
+                    const scaleChange = newScale - scale;
+                    translateX -= (mouseX - translateX) * (scaleChange / scale);
+                    translateY -= (mouseY - translateY) * (scaleChange / scale);
+
+                    scale = newScale;
+                    updateTransform();
+                }
+            });
+
+            function toggleControls() {
+                const content = document.getElementById('controlsContent');
+                content.style.display = content.style.display === 'none' ? 'block' : 'none';
+            }
+
+            function loadAndPlayVideo(index) {
+                const videoOverlay = document.getElementById('videoOverlay');
+                const videoElement = videoOverlay.querySelector('video');
+                const videoSource = discoveries[index].visual;
+
+                videoElement.src = videoSource;
+                videoElement.play();
+                videoOverlay.style.display = 'block';
+
+                currentVideoIndex = index;
+            }
+
+            function exportSelected() {
+                const selectedData = Array.from(selectedEntries).map(index => discoveries[index]);
+                selectedData.forEach((discovery, index) => {
+                    const name = discovery.visual.split('/')[0];
+                    const url = `${name}/${name}.zip`;
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `${name}.zip`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                })
+            }
+
+            function changeView() {
+                const selectedView = document.getElementById('viewSelect').value;
+                discoveries = data[selectedView];
+                renderDiscoveries();
+            }
+
+            document.addEventListener('DOMContentLoaded', () => {
+                loadDiscoveries().then(() => {
+                    document.getElementById('imageCountSlider').max = discoveries.length;
+                    document.getElementById('imageCountSlider').value = discoveries.length;
+                    shownImages = discoveries.length;
+                    updateImageCounter();
+                    renderDiscoveries();
+                });
+                loadAvailableViews();
+            });
+
+            document.getElementById('container').addEventListener('mousedown', (e) => {
+                isDragging = true;
+                startX = e.clientX - translateX;
+                startY = e.clientY - translateY;
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (isDragging) {
+                    translateX = e.clientX - startX;
+                    translateY = e.clientY - startY;
+                    updateTransform();
+                }
+            });
+
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+
+            document.getElementById('imageSizeSlider').addEventListener('input', (e) => {
+                imageSize = parseInt(e.target.value);
+                renderDiscoveries();
+            });
+
+            document.getElementById('imageCountSlider').addEventListener('input', (e) => {
+                shownImages = parseInt(e.target.value);
+                renderDiscoveries();
+                updateImageCounter();
+            });
+
+            document.getElementById('addToExportButton').addEventListener('click', () => {
+                if (currentVideoIndex !== null) {
+                    if (selectedEntries.has(currentVideoIndex)) {
+                        selectedEntries.delete(currentVideoIndex);
+                    } else {
+                        selectedEntries.add(currentVideoIndex);
+                    }
+                    updateExportList();
+                }
+            });
+
+            function updateExportList() {
+                const exportList = document.getElementById('exportList');
+                exportList.innerHTML = '';
+                selectedEntries.forEach(index => {
+                    const li = document.createElement('li');
+                    const name = discoveries[index].visual.split('/')[0];
+                    li.textContent = name;
+                    exportList.appendChild(li);
+                });
+            }
+        </script>
+    </div>
+</body>
+
+</html>
